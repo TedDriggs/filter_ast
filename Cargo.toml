@@ -1,0 +1,18 @@
+[package]
+name = "filter_ast"
+version = "0.1.0"
+authors = ["Ted Driggs <ted.driggs@outlook.com>"]
+edition = "2018"
+license = "MIT"
+repository = "https://github.com/TedDriggs/filter_ast"
+documentation = "https://docs.rs/filter_ast/0.1.0"
+description = """
+An AST for boolean filter expressions
+"""
+readme = "README.md"
+exclude = ["/.github/**"]
+
+
+[dependencies]
+from_variants = "0.5.0"
+serde = { version = "1.0.104", optional = true, features = ["derive"] }
