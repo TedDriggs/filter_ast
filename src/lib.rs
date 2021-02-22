@@ -2,7 +2,6 @@
 
 use std::fmt;
 
-use from_variants::FromVariants;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
@@ -138,7 +137,7 @@ impl<T: Ord> Tree<T> {
 /// A filter expression.
 ///
 /// Filter expressions are an abstract representation of a function `(val: T) -> bool`.
-#[derive(Debug, Clone, FromVariants)]
+#[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum Expr<F, P, O> {
     /// A sub-tree in the filter expression.
@@ -192,6 +191,18 @@ impl<F, P, O> Expr<F, P, O> {
             Expr::Clause(clause) => transform(clause),
             Expr::Tree(tree) => tree.map(|sub| sub.map(transform)).into(),
         }
+    }
+}
+
+impl<F, P, O> From<Clause<F, P, O>> for Expr<F, P, O> {
+    fn from(v: Clause<F, P, O>) -> Self {
+        Self::Clause(v)
+    }
+}
+
+impl<F, P, O> From<Tree<Expr<F, P, O>>> for Expr<F, P, O> {
+    fn from(v: Tree<Expr<F, P, O>>) -> Self {
+        Self::Tree(v)
     }
 }
 
