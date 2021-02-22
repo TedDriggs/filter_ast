@@ -1,6 +1,10 @@
 //! `filter_ast` provides an AST representation of a boolean filter expression.
 
-use std::{fmt, slice};
+use std::{
+    fmt, iter,
+    ops::{BitAnd, BitOr, Not},
+    slice,
+};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -54,6 +58,37 @@ impl<F, P, O> Clause<F, P, O> {
 impl<F: fmt::Display, P: fmt::Display, O: fmt::Display> fmt::Display for Clause<F, P, O> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{} {} {}", self.field, self.operator, self.operand)
+    }
+}
+
+impl<F, P, O, Rhs> BitAnd<Rhs> for Clause<F, P, O>
+where
+    Expr<F, P, O>: BitAnd<Rhs, Output = Expr<F, P, O>>,
+{
+    type Output = Expr<F, P, O>;
+
+    fn bitand(self, rhs: Rhs) -> Self::Output {
+        Expr::from(self) & rhs
+    }
+}
+
+impl<F, P, O, Rhs> BitOr<Rhs> for Clause<F, P, O>
+where
+    Expr<F, P, O>: BitOr<Rhs, Output = Expr<F, P, O>>,
+{
+    type Output = Expr<F, P, O>;
+
+    fn bitor(self, rhs: Rhs) -> Self::Output {
+        Expr::from(self) | rhs
+    }
+}
+
+/// Invert the filter expression by wrapping the clause in a tree with `Not` as its operator.
+impl<F, P, O> Not for Clause<F, P, O> {
+    type Output = Expr<F, P, O>;
+
+    fn not(self) -> Self::Output {
+        !Expr::from(self)
     }
 }
 
@@ -219,6 +254,137 @@ impl<F, P, O> From<Tree<Expr<F, P, O>>> for Expr<F, P, O> {
     }
 }
 
+/// Create a new expression representing the intersection of the provided expressions.
+///
+/// # Usage
+/// ```rust
+/// # use filter_ast::{Expr, Logic};
+/// let a = Expr::new_clause("field", "=", "v1");
+/// let b = Expr::new_clause("other", "=", "a");
+/// let c = a & b;
+/// let c_tree = c.as_tree().unwrap();
+/// assert_eq!(c_tree.operator(), Logic::And);
+/// assert_eq!(c_tree.rules()[0].as_clause().unwrap().field(), &"field");
+/// assert_eq!(c_tree.rules()[1].as_clause().unwrap().field(), &"other");
+/// ```
+///
+/// # Tree Simplification
+/// This operation will try to avoid increasing tree depth by merging rules from input tree expressions
+/// whose operator is `Logic::And`. For example, `(a & b) & (c & d & e)` will produce `a & b & c & d & e`.
+impl<F, P, O> BitAnd for Expr<F, P, O> {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        let mut rules = match self {
+            Self::Tree(Tree {
+                operator: Logic::And,
+                rules,
+            }) => rules,
+            _ => vec![self],
+        };
+
+        match rhs {
+            Self::Tree(Tree {
+                operator: Logic::And,
+                rules: rhs_rules,
+            }) => rules.extend(rhs_rules),
+            _ => rules.extend(iter::once(rhs)),
+        };
+
+        Tree {
+            operator: Logic::And,
+            rules,
+        }
+        .into()
+    }
+}
+
+impl<F, P, O> BitAnd<Clause<F, P, O>> for Expr<F, P, O> {
+    type Output = Self;
+
+    fn bitand(self, rhs: Clause<F, P, O>) -> Self::Output {
+        self & Expr::from(rhs)
+    }
+}
+
+impl<F, P, O> BitAnd<Tree<Expr<F, P, O>>> for Expr<F, P, O> {
+    type Output = Self;
+
+    fn bitand(self, rhs: Tree<Expr<F, P, O>>) -> Self::Output {
+        self & Expr::from(rhs)
+    }
+}
+
+/// Create a new expression representing the union of the provided expressions.
+///
+/// # Usage
+/// ```rust
+/// # use filter_ast::{Expr, Logic};
+/// let a = Expr::new_clause("field", "=", "v1");
+/// let b = Expr::new_clause("other", "=", "a");
+/// let c = a | b;
+/// let c_tree = c.as_tree().unwrap();
+/// assert_eq!(c_tree.operator(), Logic::Or);
+/// assert_eq!(c_tree.rules()[0].as_clause().unwrap().field(), &"field");
+/// assert_eq!(c_tree.rules()[1].as_clause().unwrap().field(), &"other");
+/// ```
+///
+/// # Tree Simplification
+/// This operation will try to avoid increasing tree depth by merging rules from input tree expressions
+/// whose operator is `Logic::And`. For example, `(a | b) | (c | d | e)` will produce `a | b | c | d | e`.
+impl<F, P, O> BitOr for Expr<F, P, O> {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        let mut rules = match self {
+            Self::Tree(Tree {
+                operator: Logic::Or,
+                rules,
+            }) => rules,
+            _ => vec![self],
+        };
+
+        match rhs {
+            Self::Tree(Tree {
+                operator: Logic::Or,
+                rules: rhs_rules,
+            }) => rules.extend(rhs_rules),
+            _ => rules.extend(iter::once(rhs)),
+        };
+
+        Tree {
+            operator: Logic::Or,
+            rules,
+        }
+        .into()
+    }
+}
+
+impl<F, P, O> BitOr<Clause<F, P, O>> for Expr<F, P, O> {
+    type Output = Self;
+
+    fn bitor(self, rhs: Clause<F, P, O>) -> Self::Output {
+        self | Expr::from(rhs)
+    }
+}
+
+impl<F, P, O> BitOr<Tree<Expr<F, P, O>>> for Expr<F, P, O> {
+    type Output = Self;
+
+    fn bitor(self, rhs: Tree<Expr<F, P, O>>) -> Self::Output {
+        self | Expr::from(rhs)
+    }
+}
+
+/// Create a new expression representing the inverse of the provided expression.
+impl<F, P, O> Not for Expr<F, P, O> {
+    type Output = Self;
+
+    fn not(self) -> Self::Output {
+        Tree::new(Logic::Not, vec![self]).into()
+    }
+}
+
 /// Iterator over all clauses in an expression.
 ///
 /// Created with [`Expr::clauses`].
@@ -374,5 +540,15 @@ mod tests {
             .collect::<Vec<_>>();
         let expected = (0..=3).collect::<Vec<_>>();
         assert_eq!(indices, expected);
+    }
+
+    #[test]
+    fn bitand_clauses() {
+        let expr = Clause::new("server", "=", "a")
+            & Clause::new("client", "=", "b")
+            & Clause::new("url", "~", "login");
+        let tree: Tree<Expr<_, _, _>> = expr.as_tree().cloned().unwrap();
+        assert_eq!(tree.operator, Logic::And);
+        assert_eq!(tree.rules.len(), 3);
     }
 }
