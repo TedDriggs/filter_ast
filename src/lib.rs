@@ -1,6 +1,6 @@
 //! `filter_ast` provides an AST representation of a boolean filter expression.
 
-use std::fmt;
+use std::{fmt, slice};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -192,6 +192,17 @@ impl<F, P, O> Expr<F, P, O> {
             Expr::Tree(tree) => tree.map(|sub| sub.map(transform)).into(),
         }
     }
+
+    /// Visit all clauses in depth-first order.
+    ///
+    /// For more advanced visiting, see [`visit::Visit`].
+    pub fn clauses<'a>(&'a self) -> Clauses<'a, F, P, O> {
+        Clauses {
+            expr: self,
+            stack: Vec::new(),
+            has_visited_root: false,
+        }
+    }
 }
 
 impl<F, P, O> From<Clause<F, P, O>> for Expr<F, P, O> {
@@ -203,6 +214,53 @@ impl<F, P, O> From<Clause<F, P, O>> for Expr<F, P, O> {
 impl<F, P, O> From<Tree<Expr<F, P, O>>> for Expr<F, P, O> {
     fn from(v: Tree<Expr<F, P, O>>) -> Self {
         Self::Tree(v)
+    }
+}
+
+/// Iterator over all clauses in an expression.
+///
+/// Created with [`Expr::clauses`].
+#[derive(Clone)]
+pub struct Clauses<'ast, F, P, O> {
+    expr: &'ast Expr<F, P, O>,
+    stack: Vec<slice::Iter<'ast, Expr<F, P, O>>>,
+    has_visited_root: bool,
+}
+
+impl<'ast, F, P, O> Clauses<'ast, F, P, O> {
+    fn start_tree(&mut self, tree: &'ast Tree<Expr<F, P, O>>) {
+        self.stack.push(tree.rules().iter());
+    }
+}
+
+impl<'ast, F, P, O> Iterator for Clauses<'ast, F, P, O> {
+    type Item = &'ast Clause<F, P, O>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.stack.last_mut() {
+            Some(i) => match i.next() {
+                Some(Expr::Clause(clause)) => Some(clause),
+                Some(Expr::Tree(tree)) => {
+                    self.start_tree(tree);
+                    self.next()
+                }
+                None => {
+                    self.stack.pop();
+                    self.next()
+                }
+            },
+            None if !self.has_visited_root => {
+                self.has_visited_root = true;
+                match self.expr {
+                    Expr::Clause(clause) => Some(clause),
+                    Expr::Tree(tree) => {
+                        self.start_tree(tree);
+                        self.next()
+                    }
+                }
+            }
+            None => None,
+        }
     }
 }
 
@@ -291,5 +349,28 @@ mod tests {
             .expect("Filter mapping should not convert tree to clause");
 
         assert_eq!(*m_tree.rules()[1].as_clause().unwrap().field(), "example");
+    }
+
+    #[test]
+    fn clause_iter() {
+        let filter = Expr::from(Tree::new(
+            Logic::Or,
+            vec![
+                Expr::new_clause(0, "=", "a"),
+                Tree::new(
+                    Logic::And,
+                    vec![Expr::new_clause(1, "=", "a"), Expr::new_clause(2, "=", "a")],
+                )
+                .into(),
+                Expr::new_clause(3, "=", "a"),
+            ],
+        ));
+
+        let indices = filter
+            .clauses()
+            .map(|clause| *clause.field())
+            .collect::<Vec<_>>();
+        let expected = (0..=3).collect::<Vec<_>>();
+        assert_eq!(indices, expected);
     }
 }
