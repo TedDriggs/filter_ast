@@ -5,6 +5,8 @@ use std::{fmt, slice};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+pub mod visit;
+
 /// A leaf node in a filter expression. This compares an individual field's value to a
 /// specific operand using some operation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
