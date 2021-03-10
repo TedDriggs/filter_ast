@@ -162,6 +162,35 @@ impl<T> Tree<T> {
     {
         Tree::from_iter(self.operator(), self.rules.into_iter().map(transform))
     }
+
+    /// Create a new tree by applying a fallible transform to all its rules. The function will return
+    /// the first error it encounters.
+    ///
+    /// # Example
+    /// ```rust
+    /// # use filter_ast::{Tree, Logic};
+    /// let tree = Tree::new(Logic::Or, vec![1, 2]);
+    /// let tree2 = tree.try_map(|x| {
+    ///     if x % 2 == 0 {
+    ///         Ok(x * 10)
+    ///     } else {
+    ///         Err(format!("Odd number: {}", x))
+    ///     }
+    /// });
+    /// assert_eq!("Odd number: 1", &tree2.unwrap_err());
+    /// ```
+    pub fn try_map<U, E, F>(self, transform: F) -> Result<Tree<U>, E>
+    where
+        F: FnMut(T) -> Result<U, E>,
+    {
+        Ok(Tree::new(
+            self.operator(),
+            self.rules
+                .into_iter()
+                .map(transform)
+                .collect::<Result<_, _>>()?,
+        ))
+    }
 }
 
 impl<T: Ord> Tree<T> {
@@ -236,6 +265,40 @@ impl<F, P, O> Expr<F, P, O> {
         match self {
             Expr::Clause(clause) => transform(clause),
             Expr::Tree(tree) => tree.map(|sub| sub.map_recursive(transform)).into(),
+        }
+    }
+
+    /// Apply a fallible mapping function to each clause in the expression, returning a new expression or
+    /// the first error encountered.
+    ///
+    /// This function enables fail-fast validation and adaptation of an expression.
+    ///
+    /// A major use-case for `try_map` is schema validation: `F`, `P`, and `O` each represent the union of possible
+    /// values in their respective positions but not all permutations are valid: A field called `last_seen` might
+    /// not accept an `IpAddr` operand.
+    ///
+    /// The other main use-case for `try_map` is secondary parsing. If two operand types both serialize to strings,
+    /// then deserialization cannot immediately choose the right operand type. Guessing wrong could introduce strange
+    /// errors; it would be bad if a caller could break filtering by choosing a resource name that looked like an IP
+    /// address. In that scenario, deserialization would read the field and operator into their semantic types, while
+    /// preserving the operand as seen on the wire. Then `try_map` would be used to finish parsing, with the operand
+    /// interpretation being chosen based on the field and operator.
+    pub fn try_map<F2, P2, O2, E, TF>(self, mut transform: TF) -> Result<Expr<F2, P2, O2>, E>
+    where
+        TF: FnMut(Clause<F, P, O>) -> Result<Expr<F2, P2, O2>, E>,
+    {
+        self.try_map_recursive(&mut transform)
+    }
+
+    fn try_map_recursive<F2, P2, O2, E, TF>(self, transform: &mut TF) -> Result<Expr<F2, P2, O2>, E>
+    where
+        TF: FnMut(Clause<F, P, O>) -> Result<Expr<F2, P2, O2>, E>,
+    {
+        match self {
+            Expr::Clause(clause) => transform(clause),
+            Expr::Tree(tree) => tree
+                .try_map(|sub| sub.try_map_recursive(transform))
+                .map(Expr::from),
         }
     }
 
@@ -443,6 +506,8 @@ impl<'ast, F, P, O> Iterator for Clauses<'ast, F, P, O> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
 
     #[allow(clippy::clone_double_ref)]
@@ -526,6 +591,41 @@ mod tests {
             .expect("Filter mapping should not convert tree to clause");
 
         assert_eq!(*m_tree.rules()[1].as_clause().unwrap().field(), "example");
+    }
+
+    #[test]
+    fn try_map_filter_with_closure() {
+        let a = Clause::new("a", "=", "1");
+        let b = Clause::new("b", "=", "2");
+        let filter = a & b;
+        let produced = filter.try_map(|clause| {
+            if *clause.field() == "a" {
+                let (field, operator, _operand) = clause.into_tuple();
+                Ok(Expr::new_clause(field, operator, 1))
+            } else {
+                Err("Field is not 'a'")
+            }
+        });
+        assert_eq!(produced.unwrap_err(), "Field is not 'a'");
+    }
+
+    #[test]
+    fn try_map_filter_with_mutating_closure() {
+        let a = Clause::new("a", "=", "1");
+        let b = Clause::new("b", "=", "2");
+        let filter = a & b;
+        let mut seen_fields = BTreeSet::new();
+
+        let produced = filter.try_map(|clause| {
+            if seen_fields.insert(clause.field().to_string()) {
+                let (field, operator, _operand) = clause.into_tuple();
+                Ok(Expr::new_clause(field, operator, 1))
+            } else {
+                Err("Field already seen")
+            }
+        });
+
+        assert!(produced.is_ok());
     }
 
     #[test]
