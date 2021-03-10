@@ -305,7 +305,7 @@ impl<F, P, O> Expr<F, P, O> {
     /// Visit all clauses in depth-first order.
     ///
     /// For more advanced visiting, see [`visit::Visit`].
-    pub fn clauses<'a>(&'a self) -> Clauses<'a, F, P, O> {
+    pub fn clauses(&self) -> Clauses<'_, F, P, O> {
         Clauses {
             expr: self,
             stack: Vec::new(),

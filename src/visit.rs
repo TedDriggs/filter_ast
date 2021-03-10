@@ -8,6 +8,7 @@ pub trait Visit<'ast, F, P, O> {
     fn visit_clause(&mut self, clause: &'ast Clause<F, P, O>) {
         // Use `clause` so that the documentation doesn't show an underscore-prefixed name
         // and the compiler is happy.
+        #[allow(clippy::drop_ref)]
         std::mem::drop(clause);
     }
 
