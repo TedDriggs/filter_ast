@@ -46,6 +46,11 @@ impl<F, P, O> Clause<F, P, O> {
         &self.operand
     }
 
+    /// Create a new clause whose fields all reference `self`.
+    pub fn as_ref<'a>(&'a self) -> Clause<&'a F, &'a P, &'a O> {
+        Clause::new(&self.field, &self.operator, &self.operand)
+    }
+
     pub fn as_tuple(&self) -> (&F, &P, &O) {
         (self.field(), self.operator(), self.operand())
     }
@@ -245,10 +250,37 @@ impl<F, P, O> Expr<F, P, O> {
         }
     }
 
+    /// Apply a mapping function to a reference to each clause in the expression, creating
+    /// a new expression without consuming the original.
+    pub fn map_ref<'ast, F2, P2, O2, TF>(&'ast self, mut transform: TF) -> Expr<F2, P2, O2>
+    where
+        TF: FnMut(&'ast Clause<F, P, O>) -> Expr<F2, P2, O2>,
+    {
+        self.map_ref_recursive(&mut transform)
+    }
+
+    fn map_ref_recursive<'ast, F2, P2, O2, TF>(&'ast self, transform: &mut TF) -> Expr<F2, P2, O2>
+    where
+        TF: FnMut(&'ast Clause<F, P, O>) -> Expr<F2, P2, O2>,
+    {
+        match self {
+            Expr::Clause(clause) => transform(clause).into(),
+            Expr::Tree(tree) => Tree::from_iter(
+                tree.operator,
+                tree.rules()
+                    .iter()
+                    .map(|sub| sub.map_ref_recursive(transform)),
+            )
+            .into(),
+        }
+    }
+
     /// Apply a mapping function to each clause in the expression, creating a new expression.
     ///
     /// The mapping function is allowed to return a new tree; this enables expansion of one
     /// clause into a nested sub-tree.
+    ///
+    /// For a non-consuming version of this function, see [`Expr::map_ref`].
     pub fn map<F2, P2, O2, TF>(self, mut transform: TF) -> Expr<F2, P2, O2>
     where
         TF: FnMut(Clause<F, P, O>) -> Expr<F2, P2, O2>,
@@ -269,6 +301,51 @@ impl<F, P, O> Expr<F, P, O> {
     }
 
     /// Apply a fallible mapping function to each clause in the expression, returning a new expression or
+    /// the first error encountered. The input expression is not consumed.
+    ///
+    /// This function enables fail-fast validation and adaptation of an expression.
+    ///
+    /// A major use-case for `try_map_ref` is schema validation: `F`, `P`, and `O` each represent the union of possible
+    /// values in their respective positions but not all permutations are valid: A field called `last_seen` might
+    /// not accept an `IpAddr` operand.
+    ///
+    /// The other main use-case for `try_map_ref` is secondary parsing. If two operand types both serialize to strings,
+    /// then deserialization cannot immediately choose the right operand type. Guessing wrong could introduce strange
+    /// errors; it would be bad if a caller could break filtering by choosing a resource name that looked like an IP
+    /// address. In that scenario, deserialization would read the field and operator into their semantic types, while
+    /// preserving the operand as seen on the wire. Then `try_map_ref` would be used to finish parsing, with the operand
+    /// interpretation being chosen based on the field and operator.
+    pub fn try_map_ref<'ast, F2, P2, O2, E, TF>(
+        &'ast self,
+        mut transform: TF,
+    ) -> Result<Expr<F2, P2, O2>, E>
+    where
+        TF: FnMut(&'ast Clause<F, P, O>) -> Result<Expr<F2, P2, O2>, E>,
+    {
+        self.try_map_ref_recursive(&mut transform)
+    }
+
+    fn try_map_ref_recursive<'ast, F2, P2, O2, E, TF>(
+        &'ast self,
+        transform: &mut TF,
+    ) -> Result<Expr<F2, P2, O2>, E>
+    where
+        TF: FnMut(&'ast Clause<F, P, O>) -> Result<Expr<F2, P2, O2>, E>,
+    {
+        match self {
+            Expr::Clause(clause) => transform(clause),
+            Expr::Tree(tree) => Ok(Tree::new(
+                tree.operator,
+                tree.rules
+                    .iter()
+                    .map(|sub| sub.try_map_ref_recursive(transform))
+                    .collect::<Result<_, _>>()?,
+            )
+            .into()),
+        }
+    }
+
+    /// Apply a fallible mapping function to each clause in the expression, returning a new expression or
     /// the first error encountered.
     ///
     /// This function enables fail-fast validation and adaptation of an expression.
@@ -283,6 +360,8 @@ impl<F, P, O> Expr<F, P, O> {
     /// address. In that scenario, deserialization would read the field and operator into their semantic types, while
     /// preserving the operand as seen on the wire. Then `try_map` would be used to finish parsing, with the operand
     /// interpretation being chosen based on the field and operator.
+    ///
+    /// For a non-consuming version of this function, see [`Expr::try_map_ref`].
     pub fn try_map<F2, P2, O2, E, TF>(self, mut transform: TF) -> Result<Expr<F2, P2, O2>, E>
     where
         TF: FnMut(Clause<F, P, O>) -> Result<Expr<F2, P2, O2>, E>,
@@ -591,6 +670,16 @@ mod tests {
             .expect("Filter mapping should not convert tree to clause");
 
         assert_eq!(*m_tree.rules()[1].as_clause().unwrap().field(), "example");
+    }
+
+    #[test]
+    fn map_ref_creates_parallel() {
+        let expr = Clause::new("a".to_string(), "=".to_string(), "1".to_string())
+            & Clause::new("b".to_string(), "=".to_string(), "1".to_string());
+        let ref_form = expr.map_ref(|c| c.as_ref().into());
+        for (original, r) in expr.clauses().zip(ref_form.clauses()) {
+            assert_eq!(original.field(), *r.field());
+        }
     }
 
     #[test]

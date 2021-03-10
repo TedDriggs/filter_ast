@@ -24,9 +24,9 @@ enum Operand {
 
 impl Operand {
     /// Parse an operand string into an operand using the specified interpretation.
-    fn parse_as(ty: OperandType, value: String) -> Result<Self, AddrParseError> {
+    fn parse_as(ty: OperandType, value: &str) -> Result<Self, AddrParseError> {
         match ty {
-            OperandType::Text => Ok(Operand::Text(value)),
+            OperandType::Text => Ok(Operand::Text(value.to_string())),
             OperandType::IpAddr => value.parse().map(Operand::IpAddr),
         }
     }
@@ -70,9 +70,9 @@ enum ClauseError {
 }
 
 fn validate_clause(
-    clause: Clause<Field, Operator, String>,
+    clause: &Clause<Field, Operator, String>,
 ) -> Result<Expr<Field, Operator, Operand>, ClauseError> {
-    let (field, operator, operand) = clause.into_tuple();
+    let (&field, &operator, operand) = clause.as_tuple();
     let operand = Operand::parse_as(
         get_operand_type_for(field, operator).ok_or_else(|| ClauseError::InvalidOperator {
             seen: operator,
@@ -99,7 +99,7 @@ struct AllErrors {
 
 impl<'ast> Visit<'ast, Field, Operator, String> for AllErrors {
     fn visit_clause(&mut self, clause: &'ast Clause<Field, Operator, String>) {
-        if let Err(error) = validate_clause(clause.clone()) {
+        if let Err(error) = validate_clause(clause) {
             self.errors.push(Error {
                 error,
                 path: self.current_path.clone(),
@@ -120,8 +120,10 @@ fn process_expr(
     expr: Expr<Field, Operator, String>,
 ) -> Result<Expr<Field, Operator, Operand>, Vec<Error>> {
     // We attempt the fast-path conversion, then in case of a problem slow down and gather up errors for
-    // each clause to return to the client.
-    expr.clone().try_map(validate_clause).or_else(|_| {
+    // each clause to return to the client. We use `try_map_ref` to avoid consuming the original input
+    // when attempting validation; this means we only allocate as we successfully build each node in the
+    // AST.
+    expr.try_map_ref(validate_clause).or_else(|_| {
         let mut visitor = AllErrors::default();
         visitor.visit_expr(&expr);
         Err(visitor.errors)
