@@ -158,7 +158,7 @@ impl<T> Tree<T> {
     /// ```
     pub fn map<U, F>(self, transform: F) -> Tree<U>
     where
-        F: Fn(T) -> U,
+        F: FnMut(T) -> U,
     {
         Tree::from_iter(self.operator(), self.rules.into_iter().map(transform))
     }
@@ -220,13 +220,22 @@ impl<F, P, O> Expr<F, P, O> {
     ///
     /// The mapping function is allowed to return a new tree; this enables expansion of one
     /// clause into a nested sub-tree.
-    pub fn map<F2, P2, O2, TF>(self, transform: &TF) -> Expr<F2, P2, O2>
+    pub fn map<F2, P2, O2, TF>(self, mut transform: TF) -> Expr<F2, P2, O2>
     where
-        TF: Fn(Clause<F, P, O>) -> Expr<F2, P2, O2>,
+        TF: FnMut(Clause<F, P, O>) -> Expr<F2, P2, O2>,
+    {
+        self.map_recursive(&mut transform)
+    }
+
+    /// Implementation helper for `map`, allowing callers to pass an owned closure while using a `&mut`
+    /// reference internally to call the function multiple times.
+    fn map_recursive<F2, P2, O2, TF>(self, transform: &mut TF) -> Expr<F2, P2, O2>
+    where
+        TF: FnMut(Clause<F, P, O>) -> Expr<F2, P2, O2>,
     {
         match self {
             Expr::Clause(clause) => transform(clause),
-            Expr::Tree(tree) => tree.map(|sub| sub.map(transform)).into(),
+            Expr::Tree(tree) => tree.map(|sub| sub.map_recursive(transform)).into(),
         }
     }
 
@@ -504,7 +513,7 @@ mod tests {
             ],
         ));
 
-        let mapped = filter.map(&|clause| {
+        let mapped = filter.map(|clause| {
             if *clause.field() == ".device" {
                 Expr::new_clause("example", "!=", "b")
             } else {
