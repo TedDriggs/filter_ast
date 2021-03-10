@@ -1,11 +1,11 @@
 [package]
 name = "filter_ast"
-version = "0.1.2"
+version = "0.2.0"
 authors = ["Ted Driggs <ted.driggs@outlook.com>"]
 edition = "2018"
 license = "MIT"
 repository = "https://github.com/TedDriggs/filter_ast"
-documentation = "https://docs.rs/filter_ast/0.1.2"
+documentation = "https://docs.rs/filter_ast/0.2.0"
 description = """
 An AST for boolean filter expressions
 """
