@@ -131,6 +131,11 @@ impl<T> Tree<T> {
         &self.rules
     }
 
+    /// Decompose the tree into its operator and rules.
+    pub fn into_tuple(self) -> (Logic, Vec<T>) {
+        (self.operator, self.rules)
+    }
+
     /// Create an instance by collecting the rules from an iterator.
     ///
     /// # Example
